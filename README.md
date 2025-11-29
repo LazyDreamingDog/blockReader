@@ -8,7 +8,8 @@
 
 ```bash
 # 1. 克隆项目
-cd /Users/wenkuanxiao/代码/磐古开发/blockReader
+git clone git@github.com:LazyDreamingDog/blockReader.git
+cd blockReader
 
 # 2. 启动应用（无需配置数据库）
 mvn spring-boot:run
