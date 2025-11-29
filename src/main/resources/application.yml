@@ -1,0 +1,48 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: blockchain-explorer
+
+  # 数据库配置 - 暂时禁用用于测试
+  datasource:
+    url: jdbc:mysql://localhost:3306/blockchain_explorer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    password: root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    
+  # JPA配置 - 暂时禁用自动建表
+  jpa:
+    hibernate:
+      ddl-auto: none  # 禁用自动创建表（测试时使用）
+    show-sql: false  # 关闭SQL日志
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+# 区块链配置
+blockchain:
+  # RPC节点地址
+  rpc-url: http://47.243.174.71:36054
+  # Chain ID
+  chain-id: 20251101
+  
+  # 区块同步配置
+  sync:
+    # 是否从创世区块开始同步（false则只同步新区块）
+    sync-from-genesis: true
+    # 同步任务执行间隔（毫秒）
+    interval: 5000
+    # 批量处理区块数量
+    batch-size: 10
+    # 起始区块号（如果不从创世区块开始）
+    start-block: 0
+
+# 日志配置
+logging:
+  level:
+    com.blockchain.explorer: DEBUG
+    org.web3j: INFO
+    org.hibernate.SQL: DEBUG
