@@ -1,5 +1,6 @@
 package com.blockchain.explorer.service;
 
+import com.blockchain.explorer.dto.ExtendedBlockData;
 import com.blockchain.explorer.entity.AccountState;
 import com.blockchain.explorer.entity.Block;
 import com.blockchain.explorer.entity.Transaction;
@@ -49,6 +50,9 @@ public class BlockSyncService {
     @Autowired
     private CustomRpcService customRpcService;
 
+    @Autowired
+    private ExtendedBlockService extendedBlockService;
+
     @Value("${blockchain.sync.sync-from-genesis}")
     private boolean syncFromGenesis;
 
@@ -70,9 +74,8 @@ public class BlockSyncService {
     /**
      * 定时同步区块任务
      * 每5秒执行一次（配置在application.yml中）
-     * 暂时注释掉用于测试 - 防止没有数据库时报错
      */
-    // @Scheduled(fixedDelayString = "${blockchain.sync.interval}")
+    @Scheduled(fixedDelayString = "${blockchain.sync.interval}")
     public void syncBlocks() {
         if (isRunning) {
             log.debug("Previous sync task is still running, skipping...");
@@ -133,6 +136,7 @@ public class BlockSyncService {
      * 同步单个区块及其交易
      */
     @Transactional
+    @SuppressWarnings({ "unchecked", "unused" })
     public void syncBlock(BigInteger blockNumber) {
         try {
             // 检查区块是否已存在
@@ -141,34 +145,42 @@ public class BlockSyncService {
                 return;
             }
 
-            // 从链上获取区块数据
-            EthBlock.Block ethBlock = web3j.ethGetBlockByNumber(
-                    DefaultBlockParameter.valueOf(blockNumber),
-                    true // 包含完整交易信息
-            ).send().getBlock();
+            // 从链上获取扩展区块数据（包含自定义字段）
+            ExtendedBlockData extendedBlock = extendedBlockService.getExtendedBlock(blockNumber, true);
 
-            if (ethBlock == null) {
+            if (extendedBlock == null) {
                 log.warn("Block {} not found on chain", blockNumber);
                 return;
             }
 
-            // 保存区块
-            Block block = convertToBlockEntity(ethBlock);
-            blockRepository.save(block);
+            // 保存区块（包含自定义字段）
+            Block block = convertToBlockEntity(extendedBlock);
+            Block savedBlock = blockRepository.save(block);
             log.info("Saved block {}", blockNumber);
+
+            // 同时获取标准区块数据用于交易处理
+            EthBlock.Block ethBlock = web3j.ethGetBlockByNumber(
+                    DefaultBlockParameter.valueOf(blockNumber),
+                    true).send().getBlock();
 
             // 保存交易
             Set<String> addressesInBlock = new HashSet<>();
             if (ethBlock.getTransactions() != null && !ethBlock.getTransactions().isEmpty()) {
-                for (EthBlock.TransactionResult txResult : ethBlock.getTransactions()) {
-                    EthBlock.TransactionObject txObject = (EthBlock.TransactionObject) txResult.get();
+                for (EthBlock.TransactionResult<EthBlock.TransactionObject> txResult : ethBlock.getTransactions()) {
+                    EthBlock.TransactionObject txObject = txResult.get();
                     Transaction transaction = convertToTransactionEntity(txObject, ethBlock.getTimestamp());
-                    transactionRepository.save(transaction);
 
-                    // 收集涉及的地址
-                    addressesInBlock.add(transaction.getFromAddress());
-                    if (transaction.getToAddress() != null) {
-                        addressesInBlock.add(transaction.getToAddress());
+                    // Null safety check before saving
+                    if (transaction != null) {
+                        transactionRepository.save(transaction);
+
+                        // 收集涉及的地址
+                        addressesInBlock.add(transaction.getFromAddress());
+                        if (transaction.getToAddress() != null) {
+                            addressesInBlock.add(transaction.getToAddress());
+                        }
+                    } else {
+                        log.warn("Failed to convert transaction {}", txObject.getHash());
                     }
                 }
                 log.info("Saved {} transactions from block {}", ethBlock.getTransactions().size(), blockNumber);
@@ -219,20 +231,52 @@ public class BlockSyncService {
     }
 
     /**
-     * 转换区块数据
+     * 转换扩展区块数据（包含所有自定义字段）
      */
-    private Block convertToBlockEntity(EthBlock.Block ethBlock) {
+    private Block convertToBlockEntity(ExtendedBlockData extendedBlock) {
         Block block = new Block();
-        block.setBlockNumber(ethBlock.getNumber());
-        block.setBlockHash(ethBlock.getHash());
-        block.setParentHash(ethBlock.getParentHash());
-        block.setTimestamp(convertTimestamp(ethBlock.getTimestamp()));
-        block.setMiner(ethBlock.getMiner());
-        block.setGasUsed(ethBlock.getGasUsed());
-        block.setGasLimit(ethBlock.getGasLimit());
-        block.setDifficulty(ethBlock.getDifficulty());
-        block.setNonce(ethBlock.getNonce());
-        block.setTransactionCount(ethBlock.getTransactions() != null ? ethBlock.getTransactions().size() : 0);
+
+        // 基础字段
+        block.setBlockNumber(ExtendedBlockData.toBigInteger(extendedBlock.getNumber()));
+        block.setBlockHash(extendedBlock.getHash());
+        block.setParentHash(extendedBlock.getParentHash());
+        block.setTimestamp(convertTimestamp(ExtendedBlockData.toBigInteger(extendedBlock.getTime())));
+        block.setMiner(extendedBlock.getCoinbase());
+        block.setGasUsed(ExtendedBlockData.toBigInteger(extendedBlock.getGasUsed()));
+        block.setGasLimit(ExtendedBlockData.toBigInteger(extendedBlock.getGasLimit()));
+        block.setDifficulty(ExtendedBlockData.toBigInteger(extendedBlock.getDifficulty()));
+        block.setNonce(ExtendedBlockData.toBigInteger(extendedBlock.getNonce()));
+
+        // 交易数量（从 transactions 字段获取）
+        if (extendedBlock.getTransactions() instanceof java.util.List) {
+            block.setTransactionCount(((java.util.List<?>) extendedBlock.getTransactions()).size());
+        } else {
+            block.setTransactionCount(0);
+        }
+
+        // ===== 私链自定义字段 =====
+
+        // 随机数相关
+        block.setRandomNumber(extendedBlock.getRandomNumber());
+        block.setRandomRoot(extendedBlock.getRandomRoot());
+
+        // PoW 相关
+        block.setPowDifficulty(ExtendedBlockData.toBigInteger(extendedBlock.getPowDifficulty()));
+        block.setPowGas(ExtendedBlockData.toBigInteger(extendedBlock.getPowGas()));
+        block.setPowPrice(ExtendedBlockData.toBigInteger(extendedBlock.getPowPrice()));
+
+        // PoS 相关
+        block.setPosLeader(extendedBlock.getPosLeader());
+        block.setPosVoting(extendedBlock.getPosVoting());
+
+        // Commit 和污点交易
+        block.setCommitTxLength(ExtendedBlockData.toBigInteger(extendedBlock.getCommitTxLength()));
+        block.setTainted(extendedBlock.getTainted());
+
+        // 激励和费用
+        block.setIncentive(ExtendedBlockData.toBigInteger(extendedBlock.getIncentive()));
+        block.setBaseFee(ExtendedBlockData.toBigInteger(extendedBlock.getBaseFee()));
+
         return block;
     }
 

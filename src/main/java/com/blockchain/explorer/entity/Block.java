@@ -112,6 +112,12 @@ public class Block {
     private String posLeader;
 
     /**
+     * PoS投票数据
+     */
+    @Column(columnDefinition = "TEXT")
+    private String posVoting;
+
+    /**
      * Commit交易长度
      */
     private BigInteger commitTxLength;
