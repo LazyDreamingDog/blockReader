@@ -6,21 +6,51 @@
 
 ## 快速开始
 
+### 方式一：启用数据库（推荐）
+
 ```bash
 # 1. 克隆项目
 git clone git@github.com:LazyDreamingDog/blockReader.git
 cd blockReader
 
-# 2. 启动应用（无需配置数据库）
+# 2. 创建数据库
+mysql -u root -p
+CREATE DATABASE blockchain_explorer CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+# 3. 配置数据库连接
+# 编辑 src/main/resources/application.yml，修改数据库配置：
+# spring.datasource.url, username, password
+
+# 4. 启动应用（自动同步区块数据）
 mvn spring-boot:run
 
-#3. 测试RPC连接
+# 5. 测试RPC连接
 curl http://localhost:8080/api/test/connection
 
-# 4. 获取区块数据
+# 6. 查询已同步的区块
+curl http://localhost:8080/api/blocks/latest
+```
+
+### 方式二：仅测试RPC（不使用数据库）
+
+```bash
+# 1. 克隆项目
+git clone git@github.com:LazyDreamingDog/blockReader.git
+cd blockReader
+
+# 2. 禁用数据库
+# 编辑 application.yml，注释掉数据库相关配置
+
+# 3. 启动应用
+mvn spring-boot:run
+
+# 4. 测试RPC连接
+curl http://localhost:8080/api/test/connection
+
+# 5. 获取区块数据（直接从RPC）
 curl http://localhost:8080/api/test/block/100
 
-# 5. 获取私链自定义字段
+# 6. 获取私链自定义字段
 curl http://localhost:8080/api/test/extended-block/100
 ```
 
@@ -181,13 +211,72 @@ blockchain:
     batch-size: 10                     # 批量大小
 ```
 
-### 数据库配置（可选）
+### 数据库配置
 
-当前已禁用数据库，无需配置即可运行。如需启用：
+#### 1. 创建数据库
 
-1. 创建数据库: `CREATE DATABASE blockchain_explorer;`
-2. 修改 `application.yml`: `ddl-auto: update`
-3. 取消 `BlockSyncService` 中定时任务注释
+```sql
+CREATE DATABASE blockchain_explorer CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+#### 2. 配置连接信息
+
+编辑 `src/main/resources/application.yml`:
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/blockchain_explorer?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: your_username  # 修改为你的MySQL用户名
+    password: your_password  # 修改为你的MySQL密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  
+  jpa:
+    hibernate:
+      ddl-auto: update  # 自动创建/更新表结构
+    show-sql: false     # 是否显示SQL（调试时可设为true）
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+```
+
+#### 3. Maven依赖（已配置）
+
+```xml
+<dependency>
+    <groupId>mysql</groupId>
+    <artifactId>mysql-connector-java</artifactId>
+    <version>8.0.33</version>
+</dependency>
+```
+
+> **⚠️ 注意**: 如果遇到 "Project configuration is not up-to-date" 错误，请确保使用 `mysql-connector-java` 而不是 `mysql-connector-j`。
+
+#### 4. 数据库表结构
+
+应用启动后会自动创建以下表：
+
+- **blocks** - 区块信息（包含11个自定义字段）
+- **transactions** - 交易信息（包含txType字段）
+- **account_states** - 账户状态（包含securityLevel字段）
+
+#### 5. 区块同步
+
+应用启动后会自动开始同步区块数据：
+
+- 默认从区块0开始同步
+- 每5秒同步一批（默认批次大小10个区块）
+- 同步进度会在日志中显示
+
+**配置同步参数** (application.yml):
+
+```yaml
+blockchain:
+  sync:
+    sync-from-genesis: true  # true=从创世区块开始，false=从最新区块开始
+    interval: 5000           # 同步间隔（毫秒）
+    batch-size: 10           # 每批同步区块数
+```
 
 ---
 
@@ -355,14 +444,39 @@ private Web3jService getWeb3jService() {
 
 ## 常见问题
 
+### Q: 遇到 "Project configuration is not up-to-date with pom.xml" 错误？
+**A**: 这是Maven配置不同步的问题。解决方法：
+1. 确保使用正确的MySQL驱动：`mysql-connector-java`（不是`mysql-connector-j`）
+2. 在IDE中刷新Maven项目：
+   - **IntelliJ IDEA**: 右键项目 → Maven → Reload Project
+   - **Eclipse**: 右键项目 → Maven → Update Project
+3. 如果问题持续，尝试清理重新构建：`mvn clean install`
+
+### Q: 数据库连接失败怎么办？
+**A**: 检查以下配置：
+1. 确认MySQL服务已启动
+2. 验证数据库名称、用户名、密码正确
+3. 检查端口号（默认3306）
+4. 确保MySQL允许远程连接（如需要）
+5. 查看application.yml中的连接URL是否正确
+
 ### Q: 如何添加更多自定义字段？
-A: 在 `ExtendedBlockData.java` 中添加字段，使用 `@JsonProperty` 注解指定JSON字段名。
+**A**: 在 `ExtendedBlockData.java` 中添加字段，使用 `@JsonProperty` 注解指定JSON字段名。
 
 ### Q: 如何支持新的交易类型？
-A: `Transaction` 实体已包含 `txType` 字段，自动识别所有类型（0x00-0x07）。
+**A**: `Transaction` 实体已包含 `txType` 字段，自动识别所有类型（0x00-0x07）。
 
-### Q: 如何启用数据库存储？
-A: 取消 `BlockSyncService` 的定时任务注释，修改 `application.yml` 中 `ddl-auto: update`。
+### Q: 如何禁用数据库功能？
+**A**: 
+1. 在 `application.yml` 中注释掉整个 `spring.datasource` 和 `spring.jpa` 配置
+2. 在 `BlockSyncService.java` 中注释掉 `@Scheduled` 注解
+3. 仅使用TestController的端点直接从RPC获取数据
+
+### Q: 区块同步速度慢怎么办？
+**A**: 调整同步参数：
+- 增加 `batch-size`（建议不超过20）
+- 调整 `interval`（但不要太小，避免RPC节点压力）
+- 检查网络连接和RPC节点性能
 
 ---
 
@@ -384,5 +498,72 @@ A: 取消 `BlockSyncService` 的定时任务注释，修改 `application.yml` �
 - `TestController.java` - 完整的测试示例
 - `CustomRpcService.java` - 自定义RPC调用模式
 - `ExtendedBlockService.java` - 扩展数据获取
+
+---
+
+## 区块同步状态监控
+
+### 查看同步日志
+
+应用启动后，会在控制台输出同步进度：
+
+```
+INFO --- [   scheduling-1] c.b.explorer.service.BlockSyncService : Syncing blocks from 610 to 614 (chain latest: 631)
+INFO --- [   scheduling-1] c.b.explorer.service.BlockSyncService : Saved block 610
+INFO --- [   scheduling-1] c.b.explorer.service.BlockSyncService : Successfully synced blocks from 610 to 614
+```
+
+### 查询已同步的区块
+
+```bash
+# 查询最新区块
+curl http://localhost:8080/api/blocks/latest
+
+# 查询指定区块
+curl http://localhost:8080/api/blocks/100
+
+# 查询区块列表（分页）
+curl "http://localhost:8080/api/blocks?page=0&size=10"
+```
+
+### 查询交易数据
+
+```bash
+# 通过交易哈希查询
+curl http://localhost:8080/api/transactions/0x...
+
+# 查询指定区块的所有交易
+curl http://localhost:8080/api/transactions/block/100
+
+# 查询指定地址的交易
+curl http://localhost:8080/api/transactions/address/0x...
+```
+
+### 直接查询数据库
+
+```sql
+-- 查看同步进度
+SELECT MAX(block_number) as latest_synced_block FROM blocks;
+
+-- 查看区块数量
+SELECT COUNT(*) FROM blocks;
+
+-- 查看交易数量
+SELECT COUNT(*) FROM transactions;
+
+-- 查看最近10个区块
+SELECT block_number, block_hash, transaction_count, timestamp 
+FROM blocks 
+ORDER BY block_number DESC 
+LIMIT 10;
+
+-- 查看包含自定义字段的区块
+SELECT block_number, pos_leader, pow_difficulty, incentive, random_number
+FROM blocks
+WHERE block_number > 100
+LIMIT 10;
+```
+
+---
 
 祝开发顺利！🚀
